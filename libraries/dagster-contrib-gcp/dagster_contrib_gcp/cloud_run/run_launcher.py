@@ -72,7 +72,7 @@ class CloudRunRunLauncher(RunLauncher, ConfigurableClass):
         repository_origin = job_origin.repository_origin
         dg.get_dagster_logger().info(f"job_origin: {job_origin}")
         dg.get_dagster_logger().info(f"current_code_location: {current_code_location}")
-        
+
         stripped_repository_origin = repository_origin._replace(container_context={})
         stripped_job_origin = job_origin._replace(
             repository_origin=stripped_repository_origin
@@ -127,7 +127,7 @@ class CloudRunRunLauncher(RunLauncher, ConfigurableClass):
         if isinstance(job, str):
             return f"projects/{self.project}/locations/{self.region}/jobs/{job}"
 
-        dg.get_dagster_logger().info(f"job: {job}") 
+        dg.get_dagster_logger().info(f"job: {job}")
 
         project_id_for_job = self.get_project_for_code_location_or_default(job)
         region_for_job = self.get_region_for_code_location_or_default(job)
