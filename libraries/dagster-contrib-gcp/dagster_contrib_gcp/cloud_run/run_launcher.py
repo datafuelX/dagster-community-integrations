@@ -158,9 +158,11 @@ class CloudRunRunLauncher(RunLauncher, ConfigurableClass):
         if isinstance(job, str):
             return None
 
-        job.pop("name")
+        # job.pop("name")
         env = {}
         for setting_name in job:
+            if setting_name == "name":
+                continue
             node_config = job.get(setting_name)
             try:
                 node_config = check.dict_param(node_config, "node_config")
