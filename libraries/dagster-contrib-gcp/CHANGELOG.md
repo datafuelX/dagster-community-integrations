@@ -1,5 +1,23 @@
 # Changelog
 
+## Local (unreleased)
+
+### Internal
+
+- Reapplied debug logging (`job_origin`, `current_code_location`, `job`) to `CloudRunRunLauncher`, originally added in commit `2745e2e` on this fork, carried forward through the base sync.
+
+## 0.0.9
+
+### Updated
+
+- (pull/259) Added the `container_name` field option to support multi-container job launching
+
+## 0.0.4
+
+### Updated
+
+- (pull/181) Fixed mutation of job configuration preventing repeat launches of the same job due to KeyError
+
 ## 0.0.4
 
 ### Updated

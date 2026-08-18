@@ -1,0 +1,45 @@
+## [Unreleased]
+
+## Unreleased
+
+### Fixes
+
+- The `extension` overrides on `PolarsParquetIOManager` and `PolarsDeltaIOManager` are now declared as `ClassVar[Optional[str]]`, which stops pydantic from treating them as model fields. Previously every import surfaced a `UserWarning: Field name "extension" in "PolarsParquetIOManager" shadows an attribute in parent "BasePolarsUPathIOManager"` (and the same for the delta manager) — that warning is now gone. Includes a regression test asserting no shadow warning is emitted on import.
+- Fixed `PolarsParquetIOManager` reads and writes failing on S3 when fsspec-style `storage_options` (`key`, `secret`, `client_kwargs`) were passed to the IO manager. Polars uses `object_store` under the hood, which expects different key names (`aws_access_key_id`, `aws_secret_access_key`, etc.). The IO manager now translates fsspec keys to their `object_store` equivalents on every read and write, and drops unknown keys against an allowlist so typos surface as missing config rather than opaque Rust errors. Applies on `polars >= 1.17`; older versions keep the previous fsspec passthrough. Closes [#257](https://github.com/dagster-io/community-integrations/issues/257).
+- Partitioned assets/outputs now log `dagster/partition_row_count` metadata instead of `dagster/row_count`. See https://docs.dagster.io/guides/build/assets/metadata-and-tags for more details. 
+
+## Added
+
+- Added new `schema_mode` (defaults to `None`, can be set to `overwrite` or `merge`) parameter to `PolarsDeltaIOManager`. Previously schema mode had to be configured for each asset individually.
+
+## Changed
+
+- Bumped minimum `polars` version to `>=1.0.0`.
+
+## Fixed
+
+- `PolarsParquetIOManager.write_df_to_path` now passes `storage_options` to Polars `write_parquet` for cloud storage writes (requires Polars >= 1.17.0).
+- `PolarsParquetIOManager.sink_df_to_path` now uses Polars native `sink_parquet` with `storage_options` (requires Polars >= 1.17.0, falls back to collecting for older versions).
+
+## 0.27.6
+
+- Use new deltalake (>=1.0.0) syntax and arguments for delta io manager while retaining compatibility via version parsing and legacy syntax.
+
+## Fixes
+
+- Fixed use of deprecated streaming engine selector in polars collect.
+- Bump polars dev dependency to support latest deltalake syntax
+- Fixed `ImportError` when `patito` is not installed
+- Fixed groupings of iomanager config allowing inclusion of s3fs and polars options.
+
+## 0.27.2
+
+### Fixed
+
+- Fixed sinking `polars.LazyFrame` in append mode with `PolarsDeltaIOManager`
+
+## 0.27.1
+
+### Added
+
+- The Patito data validation library for Polars is now support in IO managers. DagsterType instances can be built with `dagster_polars.patito.patito_model_to_dagster_type`.

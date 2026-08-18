@@ -2,6 +2,8 @@ from dagster._core.libraries import DagsterLibraryRegistry
 
 from dagster_anthropic.resource import AnthropicResource as AnthropicResource
 
-__version__ = "0.0.3"
+__version__ = "0.0.6"
 
-DagsterLibraryRegistry.register("dagster-anthropic", __version__)
+DagsterLibraryRegistry.register(
+    "dagster-anthropic", __version__, is_dagster_package=False
+)

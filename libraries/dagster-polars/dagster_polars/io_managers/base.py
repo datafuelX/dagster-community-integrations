@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 from dagster import (
@@ -11,6 +11,8 @@ from dagster import (
     MetadataValue,
     OutputContext,
     UPathIOManager,
+)
+from dagster import (
     _check as check,
 )
 from pydantic import PrivateAttr
@@ -59,10 +61,10 @@ class BasePolarsUPathIOManager(ConfigurableIOManager, UPathIOManager):
 
     # If a child IOManager supports loading multiple partitions at once, it should override .load_partitions to immidiately return a LazyFrame (by using scan_df_from_path)
 
-    base_dir: Optional[str] = Field(
+    base_dir: str | None = Field(
         default=None, description="Base directory for storing files."
     )
-    cloud_storage_options: Optional[Mapping[str, Any]] = Field(
+    cloud_storage_options: Mapping[str, Any] | None = Field(
         default=None,
         description="Storage authentication for cloud object store",
         alias="storage_options",
@@ -82,6 +84,21 @@ class BasePolarsUPathIOManager(ConfigurableIOManager, UPathIOManager):
             if self.base_dir is not None
             else UPath(check.not_none(context.instance).storage_directory())
         )
+
+    @property
+    def storage_options(self) -> dict[str, Any]:
+        """Return UPath storage options across universal-pathlib versions.
+
+        Dagster's ``UPathIOManager`` currently reads the private ``_kwargs``
+        attribute, which was removed in universal-pathlib 0.3. Prefer the
+        public ``storage_options`` attribute when present and fall back to the
+        legacy private attribute for universal-pathlib 0.2.
+        """
+        if hasattr(self._base_path, "storage_options"):
+            return dict(self._base_path.storage_options or {})
+        if hasattr(self._base_path, "_kwargs"):
+            return self._base_path._kwargs.copy()  # noqa: SLF001
+        return {}
 
     @abstractmethod
     def write_df_to_path(
@@ -109,10 +126,10 @@ class BasePolarsUPathIOManager(ConfigurableIOManager, UPathIOManager):
     def type_router_is_eager(self, type_router: TypeRouter) -> bool:
         if type_router.is_base_type:
             if type_router.typing_type in [Any, type(None), None] or issubclass(
-                type_router.typing_type, pl.DataFrame
+                pl.DataFrame, type_router.typing_type
             ):
                 return True
-            elif issubclass(type_router.typing_type, pl.LazyFrame):
+            elif issubclass(pl.LazyFrame, type_router.typing_type):
                 return False
             else:
                 raise NotImplementedError(
@@ -124,17 +141,19 @@ class BasePolarsUPathIOManager(ConfigurableIOManager, UPathIOManager):
     def dump_to_path(
         self,
         context: OutputContext,
-        obj: Union[
-            pl.DataFrame,
-            Optional[pl.DataFrame],
-            tuple[pl.DataFrame, dict[str, Any]],
-            pl.LazyFrame,
-            Optional[pl.LazyFrame],
-            tuple[pl.LazyFrame, dict[str, Any]],
-        ],
+        obj: (
+            pl.DataFrame
+            | pl.DataFrame
+            | None
+            | tuple[pl.DataFrame, dict[str, Any]]
+            | pl.LazyFrame
+            | pl.LazyFrame
+            | None
+            | tuple[pl.LazyFrame, dict[str, Any]]
+        ),
         path: "UPath",
     ):
-        type_router = resolve_type_router(context, context.dagster_type.typing_type)
+        type_router = resolve_type_router(context, context.dagster_type)
 
         if self.type_router_is_eager(type_router):
             dump_fn = self.write_df_to_path
@@ -145,14 +164,14 @@ class BasePolarsUPathIOManager(ConfigurableIOManager, UPathIOManager):
 
     def load_from_path(
         self, context: InputContext, path: "UPath"
-    ) -> Union[
-        pl.DataFrame,
-        pl.LazyFrame,
-        tuple[pl.DataFrame, dict[str, Any]],
-        tuple[pl.LazyFrame, dict[str, Any]],
-        None,
-    ]:
-        type_router = resolve_type_router(context, context.dagster_type.typing_type)
+    ) -> (
+        pl.DataFrame
+        | pl.LazyFrame
+        | tuple[pl.DataFrame, dict[str, Any]]
+        | tuple[pl.LazyFrame, dict[str, Any]]
+        | None
+    ):
+        type_router = resolve_type_router(context, context.dagster_type)
 
         ldf = type_router.load(path, self.scan_df_from_path)
 
@@ -181,13 +200,33 @@ class BasePolarsUPathIOManager(ConfigurableIOManager, UPathIOManager):
             return ldf
 
     def get_metadata(
-        self, context: OutputContext, obj: Union[pl.DataFrame, pl.LazyFrame, None]
+        self, context: OutputContext, obj: pl.DataFrame | pl.LazyFrame | None
     ) -> dict[str, MetadataValue]:
         if obj is None:
             return {"missing": MetadataValue.bool(True)}
         else:
-            return (
-                get_polars_metadata(context, obj)
-                if obj is not None
-                else {"missing": MetadataValue.bool(True)}
-            )
+            if obj is not None:
+                metadata = get_polars_metadata(context, obj)
+                metadata.update(self._get_patito_metadata(context))
+            else:
+                metadata: dict[str, MetadataValue] = {
+                    "missing": MetadataValue.bool(True)
+                }
+
+            return metadata
+
+    def _get_patito_metadata(self, context: OutputContext) -> dict[str, MetadataValue]:
+        # this only returns a non-empty dict if Patito is installed and a Patito model is used as type annotation
+        try:
+            import patito as pt
+
+            from dagster_polars.patito import get_patito_metadata
+
+            if context.dagster_type.typing_type is not None and issubclass(
+                context.dagster_type.typing_type, pt.DataFrame
+            ):
+                return get_patito_metadata(context.dagster_type.typing_type.model)  # ty: ignore
+        except (ImportError, TypeError):
+            return {}
+
+        return {}

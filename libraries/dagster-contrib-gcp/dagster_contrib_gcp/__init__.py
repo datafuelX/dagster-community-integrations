@@ -1,5 +1,7 @@
 from dagster._core.libraries import DagsterLibraryRegistry
 
-__version__ = "0.0.5"
+__version__ = "0.0.10"
 
-DagsterLibraryRegistry.register("dagster-contrib-gcp", __version__)
+DagsterLibraryRegistry.register(
+    "dagster-contrib-gcp", __version__, is_dagster_package=False
+)

@@ -7,7 +7,7 @@ from typing import TypedDict, cast
 from dagster import OutputContext
 from dagster._annotations import public
 from dagster._config.pythonic_config import ConfigurableIOManagerFactory
-from dagster._core.definitions.time_window_partitions import TimeWindow
+from dagster._core.definitions import TimeWindow
 from dagster._core.storage.db_io_manager import (
     DbClient,
     DbIOManager,
@@ -88,7 +88,7 @@ class IcebergDbClient(DbClient):
     @contextmanager
     def connect(context, table_slice: TableSlice) -> Iterator[Catalog]:
         resource_config = cast(
-            _IcebergTableIOManagerResourceConfig,
+            "_IcebergTableIOManagerResourceConfig",
             context.resource_config,
         )
         # Config passed as env variables or using config file.
@@ -102,82 +102,143 @@ class IcebergDbClient(DbClient):
             )
 
 
-@preview
 @public
+@preview
 class IcebergIOManager(ConfigurableIOManagerFactory):
-    """Base class for an IO manager definition that reads inputs from and writes outputs to Iceberg tables.
+    """Base class for an I/O manager definition that reads inputs from and writes outputs to Iceberg tables.
 
     Examples:
+        .. code-block:: python
 
-    ```python
-    import pandas as pd
-    import pyarrow as pa
-    from dagster import Definitions, asset
+            import pandas as pd
+            import pyarrow as pa
+            from dagster import Definitions, asset
+            from dagster_iceberg.config import IcebergCatalogConfig
+            from dagster_iceberg.io_manager.arrow import PyArrowIcebergIOManager
 
-    from dagster_iceberg.config import IcebergCatalogConfig
-    from dagster_iceberg.io_manager.arrow import PyArrowIcebergIOManager
-
-    CATALOG_URI = "sqlite:////home/vscode/workspace/.tmp/examples/select_columns/catalog.db"
-    CATALOG_WAREHOUSE = (
-        "file:///home/vscode/workspace/.tmp/examples/select_columns/warehouse"
-    )
-
-
-    resources = {
-        "io_manager": PyArrowIcebergIOManager(
-            name="test",
-            config=IcebergCatalogConfig(
-                properties={"uri": CATALOG_URI, "warehouse": CATALOG_WAREHOUSE}
-            ),
-            schema="dagster",
-        )
-    }
-
-
-    @asset
-    def iris_dataset() -> pa.Table:
-        pa.Table.from_pandas(
-            pd.read_csv(
-                "https://docs.dagster.io/assets/iris.csv",
-                names=[
-                    "sepal_length_cm",
-                    "sepal_width_cm",
-                    "petal_length_cm",
-                    "petal_width_cm",
-                    "species",
-                ],
+            CATALOG_URI = "sqlite:////home/vscode/workspace/.tmp/examples/select_columns/catalog.db"
+            CATALOG_WAREHOUSE = (
+                "file:///home/vscode/workspace/.tmp/examples/select_columns/warehouse"
             )
-        )
 
 
-    defs = Definitions(assets=[iris_dataset], resources=resources)
-    ```
+            resources = {
+                "io_manager": PyArrowIcebergIOManager(
+                    name="test",
+                    config=IcebergCatalogConfig(
+                        properties={"uri": CATALOG_URI, "warehouse": CATALOG_WAREHOUSE}
+                    ),
+                    namespace="dagster",
+                )
+            }
 
-    If you do not provide a schema, Dagster will determine a schema based on the assets and ops using
-    the I/O Manager. For assets, the schema will be determined from the asset key, as in the above example.
-    For ops, the schema can be specified by including a "schema" entry in output metadata. If none
-    of these is provided, the schema will default to "public". The I/O manager will check if the namespace
-    exists in the iceberg catalog. It does not automatically create the namespace if it does not exist.
 
-    ```python
-    @op(
-        out={"my_table": Out(metadata={"schema": "my_schema"})}
-    )
-    def make_my_table() -> pd.DataFrame:
-        ...
-    ```
+            @asset
+            def iris_dataset() -> pa.Table:
+                pa.Table.from_pandas(
+                    pd.read_csv(
+                        "https://docs.dagster.io/assets/iris.csv",
+                        names=[
+                            "sepal_length_cm",
+                            "sepal_width_cm",
+                            "petal_length_cm",
+                            "petal_width_cm",
+                            "species",
+                        ],
+                    )
+                )
 
-    To only use specific columns of a table as input to a downstream op or asset, add the metadata "columns" to the
-    In or AssetIn.
 
-    ```python
-    @asset(
-        ins={"my_table": AssetIn("my_table", metadata={"columns": ["a"]})}
-    )
-    def my_table_a(my_table: pd.DataFrame):
-        # my_table will just contain the data from column "a"
-        ...
-    ```
+            defs = Definitions(assets=[iris_dataset], resources=resources)
+
+        If you do not provide a schema, Dagster will determine a schema based on the assets and ops using
+        the I/O manager. For assets, the schema will be determined from the asset key, as in the above example.
+        For ops, the schema can be specified by including a "schema" entry in output metadata. If none
+        of these is provided, the schema will default to "public". The I/O manager will check if the namespace
+        exists in the Iceberg catalog. It does not automatically create the namespace if it does not exist.
+
+        .. code-block:: python
+
+            @op(
+                out={"my_table": Out(metadata={"schema": "my_schema"})}
+            )
+            def make_my_table() -> pa.Table:
+                ...
+
+        To only use specific columns of a table as input to a downstream op or asset, add the metadata "columns" to the
+        ``In`` or ``AssetIn``.
+
+        .. code-block:: python
+
+            @asset(
+                ins={"my_table": AssetIn("my_table", metadata={"columns": ["a"]})}
+            )
+            def my_table_a(my_table: pa.Table):
+                # my_table will just contain the data from column "a"
+                ...
+
+        To select a write mode, set the ``write_mode`` key in the asset definition metadata or at runtime via output metadata.
+        Write mode set at runtime takes precedence over the one set in the definition metadata.
+        Valid modes are ``append``, ``overwrite``, and ``upsert``; default is ``overwrite``.
+
+        .. code-block:: python
+
+            # set at definition time via definition metadata
+            @asset(
+                metadata={"write_mode": "append"}
+            )
+            def my_table_a(my_table: pa.Table):
+                return my_table
+
+            # set at runtime via output metadata
+            @asset
+            def my_table_a(context: AssetExecutionContext, my_table: pa.Table):
+                # my_table will be written with append mode
+                context.add_output_metadata({"write_mode": "append"})
+                return my_table
+
+        To use upsert mode, set ``write_mode`` to ``upsert`` and provide ``upsert_options`` in asset definition metadata
+        or output metadata. The ``upsert_options`` dictionary should contain ``join_cols`` (list of columns to join on),
+        ``when_matched_update_all`` (boolean), and ``when_not_matched_insert_all`` (boolean).
+        Upsert options set at runtime take precedence over those set in definition metadata.
+
+        .. code-block:: python
+
+            # set at definition time via definition metadata
+            @asset(
+                metadata={
+                    "write_mode": "upsert",
+                    "upsert_options": {
+                        "join_cols": ["id"],
+                        "when_matched_update_all": True,
+                        "when_not_matched_insert_all": True,
+                    }
+                }
+            )
+            def my_table_upsert(my_table: pa.Table):
+                return my_table
+
+            # set at runtime via output metadata (overrides definition metadata)
+            @asset(
+                metadata={
+                    "write_mode": "upsert",
+                    "upsert_options": {
+                        "join_cols": ["id"],
+                        "when_matched_update_all": True,
+                        "when_not_matched_insert_all": False,
+                    }
+                }
+            )
+            def my_table_upsert_dynamic(context: AssetExecutionContext, my_table: pa.Table):
+                # Override upsert options at runtime
+                context.add_output_metadata({
+                    "upsert_options": {
+                        "join_cols": ["id", "timestamp"],
+                        "when_matched_update_all": False,
+                        "when_not_matched_insert_all": False,
+                    }
+                })
+                return my_table
     """
 
     name: str = Field(description="The name of the iceberg catalog.")
@@ -237,7 +298,7 @@ def _partition_where_clause(
 
 
 def _time_window_where_clause(table_partition: TablePartitionDimension) -> str:
-    partition = cast(TimeWindow, table_partition.partitions)
+    partition = cast("TimeWindow", table_partition.partitions)
     start_dt, end_dt = partition
     start_dt_str = start_dt.isoformat()
     end_dt_str = end_dt.isoformat()

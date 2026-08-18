@@ -8,12 +8,13 @@ try:
     from pyspark.sql.functions import days, hours, months
 except ImportError as e:
     raise ImportError("Please install dagster-iceberg with the 'spark' extra.") from e
-from dagster import ConfigurableIOManagerFactory
-from dagster._core.definitions.multi_dimensional_partitions import (
+from dagster import (
+    ConfigurableIOManagerFactory,
     MultiPartitionsDefinition,
+    PartitionsDefinition,
+    TimeWindow,
 )
-from dagster._core.definitions.partition import PartitionsDefinition, ScheduleType
-from dagster._core.definitions.time_window_partitions import TimeWindow
+from dagster._annotations import public
 from dagster._core.execution.context.input import InputContext
 from dagster._core.execution.context.output import OutputContext
 from dagster._core.storage.db_io_manager import (
@@ -25,10 +26,22 @@ from dagster._core.storage.db_io_manager import (
 )
 from pydantic import Field
 
+from dagster_iceberg._utils import preview
+
+try:
+    from dagster._core.definitions.partitions.schedule_type import (  # type: ignore[reportMissingImports]
+        ScheduleType,
+    )
+except ImportError:
+    from dagster._core.definitions.partition import (  # type: ignore[reportMissingImports]
+        ScheduleType,
+    )
+
 if TYPE_CHECKING:
     from pyspark.sql._typing import OptionalPrimitiveType
 
 
+@preview
 class SparkIcebergTypeHandler(DbTypeHandler[DataFrame]):
     """Type handler that reads and writes PySpark dataframes from and to Iceberg tables."""
 
@@ -57,6 +70,12 @@ class SparkIcebergTypeHandler(DbTypeHandler[DataFrame]):
 
         getattr(writer, mode)()
 
+    def _load_table(
+        self, table_slice: TableSlice, connection: SparkSession
+    ) -> DataFrame:
+        """Reads a PySpark dataframe from an Iceberg table."""
+        return connection.sql(SparkIcebergDbClient.get_select_statement(table_slice))
+
     def load_input(
         self,
         context: InputContext,
@@ -64,13 +83,14 @@ class SparkIcebergTypeHandler(DbTypeHandler[DataFrame]):
         connection: SparkSession,
     ) -> DataFrame:
         """Reads a PySpark dataframe from an Iceberg table."""
-        return connection.sql(SparkIcebergDbClient.get_select_statement(table_slice))
+        return self._load_table(table_slice, connection)
 
     @property
     def supported_types(self) -> Sequence[type[object]]:
         return (DataFrame,)
 
 
+@preview
 class SparkIcebergDbClient(DbClient[SparkSession]):
     @staticmethod
     def delete_table_slice(
@@ -109,20 +129,62 @@ class SparkIcebergDbClient(DbClient[SparkSession]):
         context: OutputContext | InputContext,
         table_slice: TableSlice,
     ) -> Iterator[SparkSession]:
-        builder = cast(SparkSession.Builder, SparkSession.builder)
+        builder = cast("SparkSession.Builder", SparkSession.builder)
         if context.resource_config is not None:
             if (spark_config := context.resource_config["spark_config"]) is not None:
                 builder.config(
-                    map=cast(dict[str, "OptionalPrimitiveType"], spark_config)
+                    map=cast("dict[str, OptionalPrimitiveType]", spark_config)
                 )
 
             if (remote_url := context.resource_config["remote_url"]) is not None:
-                builder.remote(cast(str, remote_url))
+                builder.remote(cast("str", remote_url))
 
         yield builder.getOrCreate()
 
 
+@public
+@preview
 class SparkIcebergIOManager(ConfigurableIOManagerFactory):
+    """An I/O manager definition that reads inputs from and writes outputs to Iceberg tables using PySpark.
+
+    This I/O manager is only designed to work with Spark Connect.
+
+    Example:
+        .. code-block:: python
+
+            from dagster import Definitions, asset
+            from dagster_iceberg.io_manager.spark import SparkIcebergIOManager
+            from pyspark.sql import SparkSession
+            from pyspark.sql.connect.dataframe import DataFrame
+
+            resources = {
+                "io_manager": SparkIcebergIOManager(
+                    catalog_name="test",
+                    namespace="dagster",
+                    remote_url="spark://localhost",
+                )
+            }
+
+
+            @asset
+            def iris_dataset() -> DataFrame:
+                spark = SparkSession.builder.remote("sc://localhost").getOrCreate()
+                return spark.read.csv(
+                    "https://docs.dagster.io/assets/iris.csv",
+                    schema=(
+                        "sepal_length_cm FLOAT, "
+                        "sepal_width_cm FLOAT, "
+                        "petal_length_cm FLOAT, "
+                        "petal_width_cm FLOAT, "
+                        "species STRING"
+                    ),
+                )
+
+
+            defs = Definitions(assets=[iris_dataset], resources=resources)
+
+    """
+
     catalog_name: str
     namespace: str
     spark_config: dict[str, Any] | None = Field(default=None)
@@ -171,7 +233,7 @@ def _partition_where_clause(
 
 
 def _time_window_where_clause(table_partition: TablePartitionDimension) -> str:
-    partition = cast(TimeWindow, table_partition.partitions)
+    partition = cast("TimeWindow", table_partition.partitions)
     start_dt, end_dt = partition
     start_dt_str = start_dt.isoformat()
     end_dt_str = end_dt.isoformat()

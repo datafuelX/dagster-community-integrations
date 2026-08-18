@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional, Union
 
 import polars as pl
 import polars.testing as pl_testing
@@ -21,10 +20,10 @@ from dagster import (
     asset,
     materialize,
 )
-from dagster_polars import PolarsDeltaIOManager
-from dagster_polars.io_managers.delta import DeltaWriteMode
-from deltalake import DeltaTable
+from deltalake import DeltaTable  # noqa: TID253
 
+from dagster_polars import PolarsDeltaIOManager
+from dagster_polars.io_managers.delta import DeltaSchemaMode, DeltaWriteMode
 from dagster_polars_tests.utils import get_saved_path
 
 
@@ -79,6 +78,51 @@ def test_polars_delta_io_manager_append(polars_delta_io_manager: PolarsDeltaIOMa
     pl_testing.assert_frame_equal(pl.concat([df, df]), pl.read_delta(saved_path))
 
 
+def test_polars_delta_io_manager_append_lazy(
+    polars_delta_io_manager: PolarsDeltaIOManager,
+):
+    df = pl.DataFrame(
+        {
+            "a": [1, 2, 3],
+        }
+    )
+
+    @asset(io_manager_def=polars_delta_io_manager, metadata={"mode": "append"})
+    def append_asset() -> pl.LazyFrame:
+        return df.lazy()
+
+    result = materialize(
+        [append_asset],
+    )
+
+    handled_output_events = list(
+        filter(
+            lambda evt: evt.is_handled_output, result.events_for_node("append_asset")
+        )
+    )
+    saved_path = handled_output_events[0].event_specific_data.metadata["path"].value  # type: ignore
+    assert (
+        handled_output_events[0].event_specific_data.metadata["dagster/row_count"].value
+        == 3
+    )  # type: ignore
+    assert isinstance(saved_path, str)
+
+    result = materialize(
+        [append_asset],
+    )
+    handled_output_events = list(
+        filter(
+            lambda evt: evt.is_handled_output, result.events_for_node("append_asset")
+        )
+    )
+    assert (
+        handled_output_events[0].event_specific_data.metadata["dagster/row_count"].value
+        == 6
+    )  # type: ignore
+
+    pl_testing.assert_frame_equal(pl.concat([df, df]), pl.read_delta(saved_path))
+
+
 def test_polars_delta_io_manager_overwrite_schema(
     polars_delta_io_manager: PolarsDeltaIOManager, dagster_instance: DagsterInstance
 ):
@@ -107,7 +151,10 @@ def test_polars_delta_io_manager_overwrite_schema(
 
     @asset(
         io_manager_def=polars_delta_io_manager,
-        metadata={"overwrite_schema": True, "mode": "overwrite"},
+        metadata={
+            "delta_write_options": {"schema_mode": "overwrite"},
+            "mode": "overwrite",
+        },
     )
     def overwrite_schema_asset_2() -> pl.DataFrame:
         return pl.DataFrame(
@@ -136,8 +183,8 @@ def test_polars_delta_io_manager_overwrite_schema(
         io_manager_def=PolarsDeltaIOManager(
             base_dir=dagster_instance.storage_directory(),
             mode=DeltaWriteMode.overwrite,
-            overwrite_schema=True,
-        )
+        ),
+        metadata={"delta_write_options": {"schema_mode": "overwrite"}},
     )
     def overwrite_schema_asset_3() -> pl.DataFrame:
         return pl.DataFrame(
@@ -190,7 +237,10 @@ def test_polars_delta_io_manager_overwrite_schema_lazy(
 
     @asset(
         io_manager_def=polars_delta_io_manager,
-        metadata={"overwrite_schema": True, "mode": "overwrite"},
+        metadata={
+            "delta_write_options": {"schema_mode": "overwrite"},
+            "mode": "overwrite",
+        },
     )
     def overwrite_schema_asset_2() -> pl.LazyFrame:
         return pl.LazyFrame(
@@ -219,8 +269,8 @@ def test_polars_delta_io_manager_overwrite_schema_lazy(
         io_manager_def=PolarsDeltaIOManager(
             base_dir=dagster_instance.storage_directory(),
             mode=DeltaWriteMode.overwrite,
-            overwrite_schema=True,
-        )
+        ),
+        metadata={"delta_write_options": {"schema_mode": "overwrite"}},
     )
     def overwrite_schema_asset_3() -> pl.LazyFrame:
         return pl.LazyFrame(
@@ -245,11 +295,9 @@ def test_polars_delta_io_manager_overwrite_schema_lazy(
     )
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_polars_delta_native_partitioning(
     polars_delta_io_manager: PolarsDeltaIOManager,
     df_for_delta: pl.DataFrame,
-    engine: str,
 ):
     manager = polars_delta_io_manager
     df = df_for_delta
@@ -261,7 +309,6 @@ def test_polars_delta_native_partitioning(
         partitions_def=partitions_def,
         metadata={
             "partition_by": "partition",
-            "delta_write_options": {"engine": engine},
         },
     )
     def upstream_partitioned(context: OpExecutionContext) -> pl.DataFrame:
@@ -292,11 +339,9 @@ def test_polars_delta_native_partitioning(
     )
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_polars_delta_native_multi_partitions(
     polars_delta_io_manager: PolarsDeltaIOManager,
     df_for_delta: pl.DataFrame,
-    engine: str,
 ):
     manager = polars_delta_io_manager
     df = df_for_delta
@@ -313,7 +358,6 @@ def test_polars_delta_native_multi_partitions(
         partitions_def=partitions_def,
         metadata={
             "partition_by": {"time": "date", "category": "category"},
-            "delta_write_options": {"engine": engine},
         },
     )
     def upstream_partitioned(context: OpExecutionContext) -> pl.DataFrame:
@@ -348,11 +392,9 @@ def test_polars_delta_native_multi_partitions(
     )
 
 
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
 def test_polars_delta_native_partitioning_loading_single_partition(
     polars_delta_io_manager: PolarsDeltaIOManager,
     df_for_delta: pl.DataFrame,
-    engine: str,
 ):
     manager = polars_delta_io_manager
     df = df_for_delta
@@ -364,7 +406,6 @@ def test_polars_delta_native_partitioning_loading_single_partition(
         partitions_def=partitions_def,
         metadata={
             "partition_by": "partition",
-            "delta_write_options": {"engine": engine},
         },
     )
     def upstream_partitioned(context: OpExecutionContext) -> pl.DataFrame:
@@ -428,6 +469,30 @@ def test_polars_delta_time_travel(
     )
 
 
+def test_polars_delta_io_manager_schema_mode_set(dagster_instance: DagsterInstance):
+    manager = PolarsDeltaIOManager(
+        base_dir=dagster_instance.storage_directory(),
+        mode=DeltaWriteMode.overwrite,
+        schema_mode=DeltaSchemaMode.overwrite,
+    )
+
+    @asset(io_manager_def=manager, name="my_asset")
+    def asset_schema_1(context: OpExecutionContext) -> pl.DataFrame:
+        return pl.DataFrame({"foo": ["a", "b"]})
+
+    res = materialize([asset_schema_1])
+
+    assert pl.scan_delta(get_saved_path(res, "my_asset")).columns == ["foo"]
+
+    @asset(io_manager_def=manager, name="my_asset")
+    def asset_schema_2(context: OpExecutionContext) -> pl.DataFrame:
+        return pl.DataFrame({"bar": [1, 2, 3]})
+
+    materialize([asset_schema_2])
+
+    assert pl.scan_delta(get_saved_path(res, "my_asset")).columns == ["bar"]
+
+
 @pytest.mark.parametrize(
     "partition_by, partition_keys, expected_filters, expected_predicate",
     [
@@ -456,11 +521,11 @@ def test_polars_delta_time_travel(
 @pytest.mark.parametrize("context", [InputContext, OutputContext])
 def test_partition_filters_predicate(
     mocker: pytest_mock.MockerFixture,
-    partition_by: Optional[Union[str, dict[str, str]]],
-    partition_keys: Union[list[str], list[dict[str, str]]],
+    partition_by: str | dict[str, str] | None,
+    partition_keys: list[str] | list[dict[str, str]],
     expected_filters: list[tuple[str, str, list[str]]],
     expected_predicate: str,
-    context: type[Union[InputContext, OutputContext]],
+    context: type[InputContext | OutputContext],
 ):
     """Test that the partition filters and predicate are generated correctly."""
     if context == InputContext:

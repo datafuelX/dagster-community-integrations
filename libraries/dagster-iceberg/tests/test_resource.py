@@ -19,7 +19,7 @@ def table_identifier(namespace: str, table_name: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def create_table_in_catalog(
+def _create_table_in_catalog(
     catalog: Catalog,
     table_identifier: str,
     data_schema: pa.Schema,
@@ -29,7 +29,7 @@ def create_table_in_catalog(
 
 @pytest.fixture(autouse=True)
 def iceberg_table(
-    create_table_in_catalog,
+    _create_table_in_catalog,
     catalog: Catalog,
     table_identifier: str,
 ) -> Table:
@@ -37,7 +37,7 @@ def iceberg_table(
 
 
 @pytest.fixture(autouse=True)
-def append_data_to_table(iceberg_table: Table, data: pa.Table):
+def _append_data_to_table(iceberg_table: Table, data: pa.Table):
     iceberg_table.append(df=data)
 
 
@@ -63,10 +63,10 @@ def test_resource(
     @asset
     def read_table(pyiceberg_table: IcebergTableResource):
         table_ = pyiceberg_table.load().scan().to_arrow()
-        assert (
-            table_.schema.to_string()
-            == "timestamp: timestamp[us]\ncategory: large_string\nvalue: double"
-        )
+        assert table_.schema.names == ["timestamp", "category", "value"]
+        assert str(table_.schema.field("timestamp").type) == "timestamp[us]"
+        assert str(table_.schema.field("category").type) in {"string", "large_string"}
+        assert str(table_.schema.field("value").type) == "double"
         assert table_.shape == (1440, 3)
 
     materialize(

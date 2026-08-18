@@ -7,6 +7,14 @@ from dagster_teradata.resources import (
     teradata_resource as teradata_resource,
 )
 
-__version__ = "0.0.2"
+from dagster_teradata.teradata_compute_cluster_manager import (
+    TeradataComputeClusterManager as TeradataComputeClusterManager,
+)
 
-DagsterLibraryRegistry.register("dagster-teradata", __version__)
+from dagster_teradata.ttu.bteq import Bteq as Bteq
+
+__version__ = "0.0.8"
+
+DagsterLibraryRegistry.register(
+    "dagster-teradata", __version__, is_dagster_package=False
+)
