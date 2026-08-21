@@ -1,5 +1,11 @@
 # Changelog
 
+## Local (unreleased)
+
+### Internal
+
+- Reapplied debug logging (`job_origin`, `current_code_location`, `job`) to `CloudRunRunLauncher`, originally added in commit `2745e2e` on this fork, carried forward through the upstream sync.
+
 ## 0.0.9
 
 ### Updated
